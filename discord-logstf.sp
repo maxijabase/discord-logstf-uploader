@@ -2,11 +2,12 @@
 #include <json>
 #include <steamworks>
 #include <autoexecconfig>
+#include <morecolors>
 
 #pragma semicolon 1
 #pragma newdecls required
 
-#define PLUGIN_VERSION "1.0"
+#define PLUGIN_VERSION "1.1"
 
 public Plugin myinfo =  {
 	name = "Discord logs.tf uploader", 
@@ -34,8 +35,7 @@ public void OnPluginStart() {
 	g_cvWebhook = AutoExecConfig_CreateConVar("sm_discordlogs_webhook", "", "Discord Webhook to broadcast new logs.");
 	g_cvDatabase = AutoExecConfig_CreateConVar("sm_discordlogs_database", "storage-local", "Database config name.");
 	
-	HookEvent("teamplay_game_over", GameOverEvent);
-	HookEvent("tf_game_over", GameOverEvent);
+	CreateTimer(60.0, FetchAPIForLog, _, TIMER_REPEAT);
 	
 	ConnectToDatabase();
 	
@@ -56,9 +56,12 @@ public void ConnectToDatabase() {
 
 public void SQL_ConnectCallback(Database db, const char[] error, any data) {
 	
+	// Error handling
 	if (db == null) {
+		
 		LogError("[DL] Error at ConnectCallback: %s", error);
 		return;
+		
 	}
 	
 	PrintToServer("[DL] Connection to database successful.");
@@ -77,9 +80,12 @@ public void CreateTable() {
 
 public void SQL_TablesCallback(Database db, DBResultSet results, const char[] error, any data) {
 	
+	// Error handling
 	if (db == null || results == null) {
+		
 		LogError("[DL] Error at TablesCallback: %s", error);
 		return;
+		
 	}
 	
 	PrintToServer("[DL] Table creation successful.");
@@ -88,21 +94,11 @@ public void SQL_TablesCallback(Database db, DBResultSet results, const char[] er
 
 /* Logs.TF and Database */
 
-public void GameOverEvent(Event event, const char[] name, bool silent) {
-	
-	// Give the Logs.TF plugin some time to upload the logs
-	CreateTimer(15.0, FetchAPIForLog);
-	
-}
-
 public Action FetchAPIForLog(Handle timer) {
 	
 	// Fetch the Logs.TF API URL from the cvar
-	char apiURL[256];
-	g_cvAPIURL.GetString(apiURL, sizeof(apiURL));
-	
 	char URL[256];
-	Format(URL, sizeof(URL), "%s", apiURL);
+	g_cvAPIURL.GetString(URL, sizeof(URL));
 	
 	// Create the request with said URL
 	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, URL);
@@ -115,19 +111,21 @@ public Action FetchAPIForLog(Handle timer) {
 public void LogsAPI_Callback(Handle request, bool failure, bool success, EHTTPStatusCode eStatusCode) {
 	
 	// Error handling
-	if (failure || !success || eStatusCode != k_EHTTPStatusCode200OK) {
+	if (failure || !success) {
+		
 		LogError("Error while querying the Logs.TF API.");
 		delete request;
 		return;
+		
 	}
 	
 	// API Response body handling
-	int bufferSize;
-	SteamWorks_GetHTTPResponseBodySize(request, bufferSize);
-	char[] response = new char[bufferSize];
-	SteamWorks_GetHTTPResponseBodyData(request, response, bufferSize);
+	int buffer;
+	SteamWorks_GetHTTPResponseBodySize(request, buffer);
+	char[] response = new char[buffer];
+	SteamWorks_GetHTTPResponseBodyData(request, response, buffer);
 	
-	// JSON Parsing to extract latest log ID
+	// JSON Parsing to extract latest log ID, time and map
 	JSON_Object obj = json_decode(response);
 	JSON_Array arrLogs = view_as<JSON_Array>(obj.GetObject("logs"));
 	JSON_Object objLogs = arrLogs.GetObject(0);
@@ -138,6 +136,7 @@ public void LogsAPI_Callback(Handle request, bool failure, bool success, EHTTPSt
 	// Filled API LOG ID, query database for DB LOG ID
 	DatabaseLogQuery();
 	delete request;
+	
 }
 
 public Action DatabaseLogQuery() {
@@ -155,15 +154,19 @@ public void SQL_LogIDCallback(Database db, DBResultSet results, const char[] err
 	
 	// Error handling
 	if (db == null || results == null) {
+		
 		LogError("[DL] Error at LogIDCallback: %s", error);
 		return;
+		
 	}
 	
 	// If there weren't results, it will just add the API LOG ID to the database (will happen once: when table is empty) 
 	if (!results.FetchRow()) {
+		
 		AddLatestLog();
 		BroadcastNewLog();
 		return;
+		
 	}
 	
 	// The rest of the times, fetch the latest DB LOG ID, store it
@@ -179,13 +182,19 @@ public void SQL_LogIDCallback(Database db, DBResultSet results, const char[] err
 
 public void CompareLogs() {
 	
+	// If both IDs are equal, do nothing
 	if (g_idb_logid == g_iapi_logid) {
-		PrintToServer("[DL] Logs were equal! Not doing nothing.");
+		
 		return;
+		
 	}
+	
+	// Else, add the newest log to the database and announce it to Discord
 	else {
+		
 		AddLatestLog();
 		BroadcastNewLog();
+		
 	}
 	
 }
@@ -196,15 +205,19 @@ public void AddLatestLog() {
 	char latestLogQuery[512];
 	Format(latestLogQuery, sizeof(latestLogQuery), "INSERT INTO discordlogs_ids (log_id) VALUES (%i);", g_iapi_logid);
 	
+	// Send query
 	g_Database.Query(SQL_LatestLogCallback, latestLogQuery);
 	
 }
 
 public void SQL_LatestLogCallback(Database db, DBResultSet results, const char[] error, any data) {
 	
+	// Error handling
 	if (db == null || results == null) {
+		
 		LogError("[DL] Error at LatestLogCallback: %s", error);
 		return;
+		
 	}
 	
 	PrintToServer("[DL] Latest log inserted into database successfully.");
@@ -215,40 +228,50 @@ public void SQL_LatestLogCallback(Database db, DBResultSet results, const char[]
 
 public void BroadcastNewLog() {
 	
+	//Format Discord message with fancy stuff
 	FormatDiscordMessage();
 	
+	// Grab the webhook link from the cvar
 	char webhookURL[256];
 	g_cvWebhook.GetString(webhookURL, sizeof(webhookURL));
 	
+	// Create and send HTTP requests
 	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, webhookURL);
 	
 	SteamWorks_SetHTTPRequestGetOrPostParameter(request, "content", g_cDiscord_Message);
 	SteamWorks_SetHTTPRequestHeaderValue(request, "Content-Type", "application/x-www-form-urlencoded");
-	
 	SteamWorks_SetHTTPCallbacks(request, DiscordBroadcast_Callback);
 	SteamWorks_SendHTTPRequest(request);
+	
 }
 
 public void DiscordBroadcast_Callback(Handle request, bool failure, bool success, EHTTPStatusCode eStatusCode) {
 	
+	// Error handling
 	if (failure || !success) {
+		
 		LogError("Error while attempting to broadcast to Discord.");
 		delete request;
 		return;
+		
 	}
 	
 	PrintToServer("[DL] New log successfully broadcasted to Discord.");
 	delete request;
+	
 }
 
 public void FormatDiscordMessage() {
 	
+	// Formatting a char as the date using the log timestamp
 	char date[32];
 	FormatTime(date, sizeof(date), "%d/%m/%Y", g_iapi_log_time);
 	
+	// Formatting a char as the time using the log timestamp
 	char time[32];
 	FormatTime(time, sizeof(time), "%R", g_iapi_log_time);
 	
+	// Formatting final message
 	Format(g_cDiscord_Message, sizeof(g_cDiscord_Message), ":calendar:  **%s - %s**\n:map:  **%s**\n:link:  https://logs.tf/%i", date, time, g_capi_map, g_iapi_logid);
 	
 } 
