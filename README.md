@@ -10,3 +10,9 @@
    - To get more information as to how to prepare an API link that suits your needs, visit http://logs.tf/about#json
    - An example link looks like this: ``http://logs.tf/api/v1/log?title=Legacy&limit=1&uploader=76561198179807307``
    - Currently the plugin only supports SQLite (to store log IDs for comparison).
+   
+ ## Compiling dependencies
+ 
+ - [sm-json](https://github.com/clugg/sm-json)
+ - [SteamWorks](https://forums.alliedmods.net/showthread.php?t=229556)
+ - [AutoExecConfig](https://github.com/Impact123/AutoExecConfig)
