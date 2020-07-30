@@ -2,7 +2,6 @@
 #include <json>
 #include <steamworks>
 #include <autoexecconfig>
-#include <morecolors>
 
 #pragma semicolon 1
 #pragma newdecls required
