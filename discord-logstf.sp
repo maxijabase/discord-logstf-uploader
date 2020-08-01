@@ -6,7 +6,7 @@
 #pragma semicolon 1
 #pragma newdecls required
 
-#define PLUGIN_VERSION "1.1"
+#define PLUGIN_VERSION "1.2"
 
 public Plugin myinfo =  {
 	name = "Discord logs.tf uploader", 
@@ -22,6 +22,7 @@ Database g_Database;
 ConVar g_cvAPIURL, g_cvWebhook, g_cvDatabase;
 int g_idb_logid, g_iapi_logid, g_iapi_log_time;
 char g_cDiscord_Message[512], g_capi_map[32];
+bool g_bIsSQLite = false;
 
 /* On Plugin Start */
 
@@ -67,12 +68,23 @@ public void SQL_ConnectCallback(Database db, const char[] error, any data) {
 	g_Database = db;
 	CreateTable();
 	
+	// Get database driver to support MySQL as well
+	char DBDRIVER[16];
+	SQL_ReadDriver(g_Database, DBDRIVER, sizeof(DBDRIVER));
+	g_bIsSQLite = strcmp(DBDRIVER, "sqlite") == 0 ? true : false;
+	
 }
 
 public void CreateTable() {
 	
 	char createTablesQuery[512];
-	Format(createTablesQuery, sizeof(createTablesQuery), "CREATE TABLE IF NOT EXISTS discordlogs_ids(entry INTEGER PRIMARY KEY, log_id INTEGER);");
+	
+	// Only time where different query syntax is needed for MySQL support	
+	if (g_bIsSQLite)
+		Format(createTablesQuery, sizeof(createTablesQuery), "CREATE TABLE IF NOT EXISTS discordlogs_ids(entry INTEGER PRIMARY KEY, log_id INTEGER);");
+	else
+		Format(createTablesQuery, sizeof(createTablesQuery), "CREATE TABLE IF NOT EXISTS discordlogs_ids(entry INT NOT NULL AUTO_INCREMENT, log_id INTEGER, PRIMARY KEY (entry));");
+		
 	g_Database.Query(SQL_TablesCallback, createTablesQuery);
 	
 }
