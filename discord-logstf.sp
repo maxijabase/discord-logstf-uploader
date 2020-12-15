@@ -6,14 +6,17 @@
 #pragma semicolon 1
 #pragma newdecls required
 
-#define PLUGIN_VERSION "1.2"
+#define PLUGIN_VERSION "1.3"
+#define PREFIX "[Discord Logs.TF]"
 
 public Plugin myinfo =  {
-	name = "Discord logs.tf uploader", 
+	
+	name = "Discord Logs.TF Uploader", 
 	author = "ampere", 
 	description = "Uploads the latest Logs.TF logs to a Discord Server.", 
 	version = PLUGIN_VERSION, 
 	url = "https://legacyhub.xyz"
+	
 };
 
 /* Global Handles and Variables */
@@ -56,22 +59,23 @@ public void ConnectToDatabase() {
 
 public void SQL_ConnectCallback(Database db, const char[] error, any data) {
 	
-	// Error handling
 	if (db == null) {
 		
-		LogError("[DL] Error at ConnectCallback: %s", error);
+		LogError("%s %s", PREFIX, error);
 		return;
 		
 	}
 	
-	PrintToServer("[DL] Connection to database successful.");
 	g_Database = db;
 	CreateTable();
 	
 	// Get database driver to support MySQL as well
-	char DBDRIVER[16];
-	SQL_ReadDriver(g_Database, DBDRIVER, sizeof(DBDRIVER));
-	g_bIsSQLite = strcmp(DBDRIVER, "sqlite") == 0 ? true : false;
+	
+	char driver[16];
+	g_Database.Driver.GetIdentifier(driver, sizeof(driver));
+	g_bIsSQLite = driver[0] == 's' ? true : false;
+	
+	PrintToServer("%s Connection to database successful.", PREFIX);
 	
 }
 
@@ -80,11 +84,19 @@ public void CreateTable() {
 	char createTablesQuery[512];
 	
 	// Only time where different query syntax is needed for MySQL support	
-	if (g_bIsSQLite)
+	
+	if (g_bIsSQLite) {
+		
 		Format(createTablesQuery, sizeof(createTablesQuery), "CREATE TABLE IF NOT EXISTS discordlogs_ids(entry INTEGER PRIMARY KEY, log_id INTEGER);");
-	else
+		
+	}
+	
+	else {
+		
 		Format(createTablesQuery, sizeof(createTablesQuery), "CREATE TABLE IF NOT EXISTS discordlogs_ids(entry INT NOT NULL AUTO_INCREMENT, log_id INTEGER, PRIMARY KEY (entry));");
 		
+	}
+	
 	g_Database.Query(SQL_TablesCallback, createTablesQuery);
 	
 }
@@ -92,14 +104,17 @@ public void CreateTable() {
 public void SQL_TablesCallback(Database db, DBResultSet results, const char[] error, any data) {
 	
 	// Error handling
+	
 	if (db == null || results == null) {
 		
-		LogError("[DL] Error at TablesCallback: %s", error);
+		LogError("%s TablesCallback: %s", PREFIX, error);
+		delete results;
 		return;
 		
 	}
 	
-	PrintToServer("[DL] Table creation successful.");
+	PrintToServer("%s Table creation successful.", PREFIX);
+	delete results;
 	
 }
 
@@ -108,10 +123,12 @@ public void SQL_TablesCallback(Database db, DBResultSet results, const char[] er
 public Action FetchAPIForLog(Handle timer) {
 	
 	// Fetch the Logs.TF API URL from the cvar
+	
 	char URL[256];
 	g_cvAPIURL.GetString(URL, sizeof(URL));
 	
 	// Create the request with said URL
+	
 	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, URL);
 	
 	SteamWorks_SetHTTPCallbacks(request, LogsAPI_Callback);
@@ -122,6 +139,7 @@ public Action FetchAPIForLog(Handle timer) {
 public void LogsAPI_Callback(Handle request, bool failure, bool success, EHTTPStatusCode eStatusCode) {
 	
 	// Error handling
+	
 	if (failure || !success) {
 		
 		LogError("Error while querying the Logs.TF API.");
@@ -131,12 +149,15 @@ public void LogsAPI_Callback(Handle request, bool failure, bool success, EHTTPSt
 	}
 	
 	// API Response body handling
+	
 	int buffer;
 	SteamWorks_GetHTTPResponseBodySize(request, buffer);
 	char[] response = new char[buffer];
 	SteamWorks_GetHTTPResponseBodyData(request, response, buffer);
+	delete request;
 	
 	// JSON Parsing to extract latest log ID, time and map
+	
 	JSON_Object obj = json_decode(response);
 	JSON_Array arrLogs = view_as<JSON_Array>(obj.GetObject("logs"));
 	JSON_Object objLogs = arrLogs.GetObject(0);
@@ -145,18 +166,24 @@ public void LogsAPI_Callback(Handle request, bool failure, bool success, EHTTPSt
 	objLogs.GetString("map", g_capi_map, sizeof(g_capi_map));
 	
 	// Filled API LOG ID, query database for DB LOG ID
+	
 	DatabaseLogQuery();
-	delete request;
+	
+	delete obj;
+	delete arrLogs;
+	delete objLogs;
 	
 }
 
 public Action DatabaseLogQuery() {
 	
 	// Create the query to fetch latest LOG ID stored in database
+	
 	char logIDquery[512];
 	Format(logIDquery, sizeof(logIDquery), "SELECT log_id FROM discordlogs_ids ORDER BY entry DESC LIMIT 1;");
 	
 	// Send query
+	
 	g_Database.Query(SQL_LogIDCallback, logIDquery);
 	
 }
@@ -164,59 +191,62 @@ public Action DatabaseLogQuery() {
 public void SQL_LogIDCallback(Database db, DBResultSet results, const char[] error, any data) {
 	
 	// Error handling
+	
 	if (db == null || results == null) {
 		
 		LogError("[DL] Error at LogIDCallback: %s", error);
+		delete results;
 		return;
 		
 	}
 	
 	// If there weren't results, it will just add the API LOG ID to the database (will happen once: when table is empty) 
+	
 	if (!results.FetchRow()) {
 		
 		AddLatestLog();
 		BroadcastNewLog();
+		delete results;
 		return;
 		
 	}
 	
 	// The rest of the times, fetch the latest DB LOG ID, store it
+	
 	int logidCol;
 	
 	results.FieldNameToNum("log_id", logidCol);
 	g_idb_logid = results.FetchInt(logidCol);
 	
 	// Compare DB LOG ID with the latest log the API declares
+	
 	CompareLogs();
+	delete results;
 	
 }
 
 public void CompareLogs() {
 	
-	// If both IDs are equal, do nothing
-	if (g_idb_logid == g_iapi_logid) {
-		
-		return;
-		
-	}
-	
-	// Else, add the newest log to the database and announce it to Discord
-	else {
+	if (g_idb_logid != g_iapi_logid) {
 		
 		AddLatestLog();
 		BroadcastNewLog();
 		
 	}
 	
+	return;
+	
 }
 
 public void AddLatestLog() {
 	
 	// Grab API LOG ID and stuff it into the database
+	
 	char latestLogQuery[512];
 	Format(latestLogQuery, sizeof(latestLogQuery), "INSERT INTO discordlogs_ids (log_id) VALUES (%i);", g_iapi_logid);
 	
 	// Send query
+	
 	g_Database.Query(SQL_LatestLogCallback, latestLogQuery);
 	
 }
@@ -224,6 +254,7 @@ public void AddLatestLog() {
 public void SQL_LatestLogCallback(Database db, DBResultSet results, const char[] error, any data) {
 	
 	// Error handling
+	
 	if (db == null || results == null) {
 		
 		LogError("[DL] Error at LatestLogCallback: %s", error);
@@ -240,13 +271,16 @@ public void SQL_LatestLogCallback(Database db, DBResultSet results, const char[]
 public void BroadcastNewLog() {
 	
 	//Format Discord message with fancy stuff
+	
 	FormatDiscordMessage();
 	
 	// Grab the webhook link from the cvar
+	
 	char webhookURL[256];
 	g_cvWebhook.GetString(webhookURL, sizeof(webhookURL));
 	
 	// Create and send HTTP requests
+	
 	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, webhookURL);
 	
 	SteamWorks_SetHTTPRequestGetOrPostParameter(request, "content", g_cDiscord_Message);
@@ -259,6 +293,7 @@ public void BroadcastNewLog() {
 public void DiscordBroadcast_Callback(Handle request, bool failure, bool success, EHTTPStatusCode eStatusCode) {
 	
 	// Error handling
+	
 	if (failure || !success) {
 		
 		LogError("Error while attempting to broadcast to Discord.");
@@ -275,14 +310,17 @@ public void DiscordBroadcast_Callback(Handle request, bool failure, bool success
 public void FormatDiscordMessage() {
 	
 	// Formatting a char as the date using the log timestamp
+	
 	char date[32];
 	FormatTime(date, sizeof(date), "%d/%m/%Y", g_iapi_log_time);
 	
 	// Formatting a char as the time using the log timestamp
+	
 	char time[32];
 	FormatTime(time, sizeof(time), "%R", g_iapi_log_time);
 	
 	// Formatting final message
+	
 	Format(g_cDiscord_Message, sizeof(g_cDiscord_Message), ":calendar:  **%s - %s**\n:map:  **%s**\n:link:  https://logs.tf/%i", date, time, g_capi_map, g_iapi_logid);
 	
 } 
