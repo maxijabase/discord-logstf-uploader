@@ -324,3 +324,5 @@ public void FormatDiscordMessage() {
 	Format(g_cDiscord_Message, sizeof(g_cDiscord_Message), ":calendar:  **%s - %s**\n:map:  **%s**\n:link:  https://logs.tf/%i", date, time, g_capi_map, g_iapi_logid);
 	
 } 
+
+// this is the coolest plugin ever and no one can prove otherwise -Gabe Newell
